@@ -628,6 +628,15 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
                     })
                     .collect();
                 let picked = pick_adapter(&infos, &displays, compositor).and_then(|i| usable.get(i)).map(|a| (*a).clone());
+                if let Some(a) = &picked
+                    && !wgpu_draws_with(a.get_info().backend, cfg!(target_os = "windows"), std::env::var_os("WGPU_BACKEND").is_some())
+                {
+                    log::warn!(
+                        "wgpu found no Direct3D 12 adapter for {}, only its OpenGL backend: drawing with eframe's OpenGL renderer instead",
+                        a.get_info().name
+                    );
+                    return Err("wgpu would draw through its OpenGL backend".to_string());
+                }
                 match &picked {
                     // Which GPU draws is the first question when a window stays black (#8, #378, #445).
                     Some(a) => {
@@ -646,6 +655,16 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
     if cfg!(target_os = "windows") {
         setup.instance_descriptor.backend_options.dx12.presentation_system = dx12_presentation(eframe::wgpu::Dx12SwapchainKind::from_env());
     }
+}
+
+/// Whether wgpu should draw with the adapter it picked on `backend`. On Windows (`windows`) wgpu
+/// reaches its OpenGL backend only for a GPU with no Direct3D 12 driver, such as Intel's Ivy
+/// Bridge, and there that backend fails in `Surface::configure` a few seconds after the window
+/// opens: too late for the start-up retry with OpenGL, so the app closed (#519, #4134, #5553).
+/// eframe's own OpenGL renderer works on the same GPUs, so wgpu declines and that retry takes over.
+/// A backend asked for with `WGPU_BACKEND` (`backend_chosen`) is kept.
+fn wgpu_draws_with(backend: eframe::wgpu::Backend, windows: bool, backend_chosen: bool) -> bool {
+    !(windows && backend == eframe::wgpu::Backend::Gl && !backend_chosen)
 }
 
 /// How Direct3D 12 presents on Windows: through a DirectComposition visual (issue #2738), unless

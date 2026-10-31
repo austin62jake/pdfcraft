@@ -111,6 +111,20 @@ fn path_from_arg_leaves_plain_paths_and_other_schemes_alone() {
 }
 
 #[test]
+fn on_windows_wgpu_leaves_an_opengl_only_gpu_to_eframes_opengl_renderer() {
+    use eframe::wgpu::Backend;
+    // Issues #4134 and #5553: an Intel HD 4000 has no Direct3D 12 driver, so wgpu picks its
+    // OpenGL backend, which fails a few seconds after the window opens.
+    assert!(!super::wgpu_draws_with(Backend::Gl, true, false), "declined, so the start-up retry uses glow");
+    // Everything else draws with wgpu as before.
+    assert!(super::wgpu_draws_with(Backend::Dx12, true, false));
+    assert!(super::wgpu_draws_with(Backend::Gl, true, true), "WGPU_BACKEND asked for it");
+    for backend in [Backend::Gl, Backend::Vulkan, Backend::Metal] {
+        assert!(super::wgpu_draws_with(backend, false, false), "{backend:?} off Windows");
+    }
+}
+
+#[test]
 fn opengl_is_the_fallback_unless_a_renderer_was_chosen() {
     use super::{RendererChoice, native_options, renderer_choice, retry_with_gl};
     assert_eq!(renderer_choice(None), RendererChoice::Auto);
