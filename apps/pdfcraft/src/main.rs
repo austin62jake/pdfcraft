@@ -617,7 +617,10 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
         setup.power_preference = eframe::wgpu::PowerPreference::LowPower;
         let displays = display_gpus();
         let compositor = compositor_gpu::compositor_gpu();
-        if !displays.is_empty() || compositor.is_some() {
+        // Always on Windows, so that an OpenGL-only GPU is declined (`wgpu_draws_with`) even when
+        // no display names its GPU, as over Remote Desktop; `pick_adapter` then ranks by kind,
+        // most frugal first, as wgpu's own low-power choice does.
+        if !displays.is_empty() || compositor.is_some() || cfg!(target_os = "windows") {
             setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, surface| {
                 let usable: Vec<&eframe::wgpu::Adapter> = adapters.iter().filter(|a| surface.is_none_or(|s| a.is_surface_supported(s))).collect();
                 let infos: Vec<(u32, u32, eframe::wgpu::DeviceType)> = usable
