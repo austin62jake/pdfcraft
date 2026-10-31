@@ -694,16 +694,20 @@ fn a_fast_spin_scrolls_as_smoothly_as_single_notches() {
     let at = h.state().views[0].viewport_rect().center();
     h.hover_at(at);
     h.run_steps(2);
+    // How far the document scrolled down in one frame, from a page on screen in both.
+    fn step_moved(h: &mut Harness<'static, PdfCraftApp>) -> f32 {
+        let tops = |h: &Harness<'static, PdfCraftApp>| (0..PAGES).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
+        let before = tops(h);
+        h.step();
+        let after = tops(h);
+        before.iter().zip(&after).find_map(|(b, a)| Some(b.as_ref()? - a.as_ref()?)).expect("a page stays on screen")
+    }
     // A notch every third frame (50 ms), inside the 80 ms that counts as a spin, for 24 notches.
     let mut moves = Vec::new();
     for _ in 0..24 {
         h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
         for _ in 0..3 {
-            let tops = |h: &Harness<'static, PdfCraftApp>| (0..PAGES).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
-            let before = tops(&h);
-            h.step();
-            let after = tops(&h);
-            moves.push(before.iter().zip(&after).find_map(|(b, a)| Some(b.as_ref()? - a.as_ref()?)).expect("a page stays on screen"));
+            moves.push(step_moved(&mut h));
         }
     }
     // The last eight notches, at the full multiplier. Eased like a single notch, each frame of a
@@ -714,6 +718,12 @@ fn a_fast_spin_scrolls_as_smoothly_as_single_notches() {
     let base = ScrollSpeed::default().line_points();
     let moved: f32 = steady.iter().sum();
     assert!(moved > 8.0 * 4.0 * base, "the spin still accelerates: {moved} over eight notches of {base}");
+    // Turned back at once, the wheel scrolls up: what the spin still owed downwards stops. The
+    // page is drawn a frame behind its scroll, so the first frame still shows the spin's last.
+    h.event(wheel(MouseWheelUnit::Line, 1.0, TouchPhase::Move));
+    step_moved(&mut h);
+    let back: f32 = (0..20).map(|_| step_moved(&mut h)).sum();
+    assert!(back < 0.0, "a notch back after the spin scrolls up: moved {back}");
 }
 
 /// Steps `frames` frames and returns how far the document scrolled down over them, from the

@@ -2356,7 +2356,7 @@ fn read_wheel(ui: &mut egui::Ui, view: &mut DocView, avail: Rect, single_paging:
     let mut line_base = input.line;
     let surplus = crate::wheel_boost::boost_extra(input, &mut view.wheel_boost_x, &mut view.wheel_boost_y, now);
     // Not all in the frame of its notch, which made a fast spin jump at every notch (#5371).
-    let mut boost_extra = view.wheel_surplus.step(surplus, now, ui.input(|i| i.stable_dt), animates);
+    let mut boost_extra = view.wheel_surplus.step(surplus, input.line, now, ui.input(|i| i.stable_dt), animates);
     if view.wheel_surplus.pending() {
         ui.ctx().request_repaint();
     }

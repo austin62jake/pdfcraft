@@ -175,8 +175,8 @@ pub(crate) struct Surplus {
 impl Surplus {
     /// Adds the surplus of the frame at `now` and returns the part to scroll now: all of it when
     /// the window doesn't `animate` (egui's notches then move at once too), else egui's eased
-    /// share for a frame of `dt` seconds.
-    pub(crate) fn step(&mut self, added: Vec2, now: f64, dt: f32, animate: bool) -> Vec2 {
+    /// share for a frame of `dt` seconds. `line` is the frame's line-wheel motion.
+    pub(crate) fn step(&mut self, added: Vec2, line: Vec2, now: f64, dt: f32, animate: bool) -> Vec2 {
         // Drawn every frame while some is left, a view would have scrolled it all by now: one
         // that wasn't (another tab was in front) doesn't jump on its return.
         let gap = now - self.at;
@@ -184,6 +184,15 @@ impl Surplus {
             self.pending = Vec2::ZERO;
         }
         self.at = now;
+        // Turning the wheel back drops what the old direction still owed. The first notch back
+        // adds no surplus of its own (its burst starts again at 1×), so its direction is read
+        // from the notch itself.
+        if line.x * self.pending.x < 0.0 {
+            self.pending.x = 0.0;
+        }
+        if line.y * self.pending.y < 0.0 {
+            self.pending.y = 0.0;
+        }
         let dt = if dt.is_finite() && dt > 0.0 { dt.min(0.1) } else { 1.0 / 60.0 };
         let share = if animate { egui::emath::exponential_smooth_factor(0.90, 0.1, dt) } else { 1.0 };
         let (x, pending_x) = ease_axis(self.pending.x, added.x, share);
@@ -208,12 +217,11 @@ impl Surplus {
     }
 }
 
-/// One axis of [`Surplus::step`]: (scroll now, still to scroll). A reversal drops what the old
-/// direction still owed, as the burst itself starts again. Under a point, the rest goes at once,
-/// as egui's does.
+/// One axis of [`Surplus::step`]: (scroll now, still to scroll). What is still to scroll is held
+/// to one frame's cap of wheel input, so a free-spinning wheel can't build up a backlog that goes
+/// on scrolling long after it stops. Under a point, the rest goes at once, as egui's does.
 fn ease_axis(pending: f32, added: f32, share: f32) -> (f32, f32) {
     let added = if added.is_finite() { added } else { 0.0 };
-    let pending = if pending * added < 0.0 { 0.0 } else { pending };
     let total = (pending + added).clamp(-MAX_FRAME_POINTS, MAX_FRAME_POINTS);
     if total.abs() < 1.0 {
         return (total, 0.0);
@@ -471,21 +479,25 @@ mod tests {
         assert_eq!(input, FrameInput::default());
     }
 
+    /// A notch down, as `accumulate` gives it, and no notch.
+    const DOWN: egui::Vec2 = egui::vec2(0.0, -100.0);
+    const NONE: egui::Vec2 = egui::Vec2::ZERO;
+
     #[test]
     fn a_surplus_eases_like_egui_and_all_of_it_arrives() {
         let dt = 1.0 / 60.0;
         let mut s = Surplus::default();
-        let first = s.step(egui::vec2(0.0, -500.0), 0.0, dt, true);
+        let first = s.step(egui::vec2(0.0, -500.0), DOWN, 0.0, dt, true);
         let share = egui::emath::exponential_smooth_factor(0.90, 0.1, dt);
         assert!((first.y - -500.0 * share).abs() < 0.01, "the first frame takes egui's share: {first:?}");
         let mut moved = first.y;
         for frame in 1..60 {
-            moved += s.step(egui::Vec2::ZERO, f64::from(frame) * f64::from(dt), dt, true).y;
+            moved += s.step(NONE, NONE, f64::from(frame) * f64::from(dt), dt, true).y;
         }
         assert!((moved + 500.0).abs() < 0.01, "the whole surplus arrives: {moved}");
         assert!(!s.pending());
         // Without animation it all goes at once, like egui's notches then.
-        assert_eq!(s.step(egui::vec2(0.0, -500.0), 1.0, dt, false), egui::vec2(0.0, -500.0));
+        assert_eq!(s.step(egui::vec2(0.0, -500.0), DOWN, 1.0, dt, false), egui::vec2(0.0, -500.0));
         assert!(!s.pending());
     }
 
@@ -493,24 +505,25 @@ mod tests {
     fn a_surplus_is_dropped_on_reversal_reset_paging_and_a_long_gap() {
         let dt = 1.0 / 60.0;
         let mut s = Surplus::default();
-        s.step(egui::vec2(0.0, -500.0), 0.0, dt, true);
-        // Turning the wheel back drops what the old direction still owed.
-        let back = s.step(egui::vec2(0.0, 100.0), 0.02, dt, true);
-        assert!(back.y > 0.0 && back.y < 100.0, "{back:?}");
+        s.step(egui::vec2(0.0, -500.0), DOWN, 0.0, dt, true);
+        // The first notch back adds no surplus (its burst starts at 1×), yet it drops what the
+        // old direction still owed.
+        assert_eq!(s.step(NONE, -DOWN, 0.02, dt, true), NONE, "nothing more scrolls down");
+        assert!(!s.pending());
         let mut s = Surplus::default();
-        s.step(egui::vec2(-300.0, -500.0), 0.0, dt, true);
+        s.step(egui::vec2(-300.0, -500.0), egui::vec2(-100.0, -100.0), 0.0, dt, true);
         s.stop_vertical();
-        let rest = s.step(egui::Vec2::ZERO, 0.02, dt, true);
+        let rest = s.step(NONE, NONE, 0.02, dt, true);
         assert!(rest.x < 0.0 && rest.y == 0.0, "only the horizontal surplus is left: {rest:?}");
         s.reset();
         assert!(!s.pending());
-        assert_eq!(s.step(egui::Vec2::ZERO, 0.04, dt, true), egui::Vec2::ZERO);
+        assert_eq!(s.step(NONE, NONE, 0.04, dt, true), NONE);
         // A view not drawn for a while (another tab in front) doesn't scroll on its return, and
         // neither does one whose clock went back.
         for later in [5.0, 4.0, f64::NAN] {
             let mut s = Surplus::default();
-            s.step(egui::vec2(0.0, -500.0), 4.5, dt, true);
-            assert_eq!(s.step(egui::Vec2::ZERO, later, dt, true), egui::Vec2::ZERO, "back at {later}");
+            s.step(egui::vec2(0.0, -500.0), DOWN, 4.5, dt, true);
+            assert_eq!(s.step(NONE, NONE, later, dt, true), NONE, "back at {later}");
             assert!(!s.pending());
         }
     }
@@ -520,10 +533,11 @@ mod tests {
         let mut s = Surplus::default();
         let inputs = [(f32::NAN, 0.016), (f32::INFINITY, 0.016), (-500.0, f32::NAN), (-500.0, 0.0), (-500.0, -1.0), (-500.0, f32::INFINITY)];
         for (frame, (added, dt)) in (0_u8..).zip(inputs) {
-            let now = s.step(egui::vec2(0.0, added), f64::from(frame) * 0.016, dt, true);
+            let now = s.step(egui::vec2(0.0, added), egui::vec2(f32::NAN, 0.0), f64::from(frame) * 0.016, dt, true);
             assert!(now.is_finite(), "{added} at {dt}: {now:?}");
         }
-        s.step(egui::vec2(0.0, -1.0e9), 0.1, 0.016, true);
-        assert!(s.step(egui::Vec2::ZERO, 0.11, 0.1, false).y >= -MAX_FRAME_POINTS, "capped like every frame of wheel input");
+        // The backlog stays within one frame's cap of wheel input.
+        s.step(egui::vec2(0.0, -1.0e9), DOWN, 0.1, 0.016, true);
+        assert!(s.step(NONE, NONE, 0.11, 0.1, false).y >= -MAX_FRAME_POINTS, "capped like every frame of wheel input");
     }
 }
