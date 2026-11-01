@@ -502,10 +502,17 @@ fn notify_software_renderer(app: &mut PdfCraftApp, device_type: eframe::wgpu::De
 /// and no reason.
 #[cfg(windows)]
 fn notify_failed_update(app: &mut PdfCraftApp, paths: &craft_update::Paths) {
+    // The helper writes one line, but the file sits in the user's folder: a longer one is cut,
+    // so a notice can't fill the window and the log line stays a line.
+    const MAX_CHARS: usize = 600;
     if let Some(error) = craft_update::self_update::take_failure(paths) {
         let error = error.trim();
-        log::warn!("the last update didn't install: {error}");
-        app.notify_fmt("The last update didn't install: {error}", &[("error", error)]);
+        let mut shown: String = error.chars().take(MAX_CHARS).collect();
+        if shown.len() < error.len() {
+            shown.push('…');
+        }
+        log::warn!("the last update didn't install: {shown}");
+        app.notify_fmt("The last update didn't install: {error}", &[("error", &shown)]);
     }
 }
 
