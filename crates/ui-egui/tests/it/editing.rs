@@ -3143,9 +3143,14 @@ fn copied_pages_paste_whatever_the_system_clipboard_holds() {
     let mut h = organize(3);
     let first = page_texts(h.state())[0].clone();
     h.state_mut().views[0].select_pages(&[0]);
+    let screenshot = || egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::GRAY; 4])));
+    // A picture pasted from another app with no pages copied yet inserts nothing.
+    h.event(screenshot());
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 3, "no pages copied, none pasted");
     assert!(h.state_mut().execute("page.copy"));
     // ⌘V over a screenshot on the system clipboard.
-    h.event(egui::Event::PasteImage(std::sync::Arc::new(egui::ColorImage::new([2, 2], vec![egui::Color32::GRAY; 4]))));
+    h.event(screenshot());
     h.run_steps(2);
     let after = page_texts(h.state());
     assert_eq!(after.len(), 4, "a picture-only clipboard still pastes the copied page");
