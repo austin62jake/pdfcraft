@@ -169,12 +169,19 @@ fn a_failed_update_says_why_at_the_next_start() {
     let mut app = super::PdfCraftApp::new();
     super::notify_failed_update(&mut app, &paths);
     assert!(app.toast.is_none(), "{:?}", app.toast);
-    // The file is outside PdfCraft's hands: a long one is cut, not shown whole.
-    std::fs::write(paths.logs().join("self-update-error.txt"), "é".repeat(100_000)).unwrap();
+    // The file is outside PdfCraft's hands: a long one is cut, not shown whole. Its start and its
+    // end stay, and the end of a failed put-back says where the previous files are.
+    let long = format!(
+        "couldn't replace pdfcraft.exe ({}); couldn't put back pdfcraft.exe (Access is denied). The previous files are in C:\\PdfCraft\\update-recovery-1",
+        "é".repeat(100_000)
+    );
+    std::fs::write(paths.logs().join("self-update-error.txt"), long).unwrap();
     let mut app = super::PdfCraftApp::new();
     super::notify_failed_update(&mut app, &paths);
     let notice = app.toast.as_ref().map(|(m, _)| m.as_str()).unwrap_or_default();
-    assert!(notice.chars().count() < 700 && notice.ends_with("é…"), "{} chars", notice.chars().count());
+    assert!(notice.chars().count() < 700, "{} chars", notice.chars().count());
+    assert!(notice.contains("couldn't replace pdfcraft.exe (éé") && notice.contains("é … é"), "{notice}");
+    assert!(notice.ends_with("The previous files are in C:\\PdfCraft\\update-recovery-1"), "{notice}");
     let _ = std::fs::remove_dir_all(&root);
 }
 
