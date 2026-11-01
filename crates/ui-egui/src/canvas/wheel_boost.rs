@@ -540,4 +540,78 @@ mod tests {
         s.step(egui::vec2(0.0, -1.0e9), DOWN, 0.1, 0.016, true);
         assert!(s.step(NONE, NONE, 0.11, 0.1, false).y >= -MAX_FRAME_POINTS, "capped like every frame of wheel input");
     }
+
+    /// A spin at `hz` frames a second: a notch down at each time in `notches` (seconds), then
+    /// frames until `until`. Returns the surplus added, the surplus scrolled by the end of each
+    /// frame (time, total), and the surplus left.
+    fn spin(hz: f64, notches: &[f64], until: f64) -> (f32, Vec<(f64, f32)>, bool) {
+        let (mut boost_x, mut boost_y, mut s) = (WheelBoost::default(), WheelBoost::default(), Surplus::default());
+        let dt = 1.0 / hz;
+        let (mut added, mut moved, mut trace) = (0.0, 0.0, Vec::new());
+        let mut next = notches.iter().peekable();
+        for frame in 0.. {
+            let now = f64::from(frame) * dt;
+            if now > until {
+                break;
+            }
+            let mut line = NONE;
+            while next.next_if(|t| **t <= now).is_some() {
+                line += DOWN;
+            }
+            let extra = boost_extra(FrameInput { line, ..Default::default() }, &mut boost_x, &mut boost_y, now);
+            added += extra.y;
+            moved += s.step(extra, line, now, dt as f32, true).y;
+            trace.push((now, moved));
+        }
+        (added, trace, s.pending())
+    }
+
+    #[test]
+    fn one_notch_leaves_no_surplus() {
+        let (added, trace, left) = spin(60.0, &[0.0], 1.0);
+        assert_eq!(added, 0.0, "a single notch is egui's alone");
+        assert!(trace.iter().all(|(_, moved)| *moved == 0.0) && !left);
+    }
+
+    #[test]
+    fn a_burst_of_ten_scrolls_its_surplus_once_and_stops() {
+        // Ten notches 20 ms apart, frames at 60 Hz.
+        let notches: Vec<f64> = (0..10).map(|i| f64::from(i) * 0.02).collect();
+        let (added, trace, left) = spin(60.0, &notches, 2.0);
+        assert!(added < -100.0, "precondition: the burst is boosted: {added}");
+        let (_, moved) = *trace.last().expect("frames");
+        assert!((moved - added).abs() < 0.01, "all of it, and no more: {moved} of {added}");
+        assert!(trace.iter().all(|(_, m)| *m >= added - 0.01), "never past the total on the way: {trace:?}");
+        assert!(!left);
+        // Done within half a second of the last notch.
+        let done = trace.iter().find(|(_, m)| (m - added).abs() < 0.01).map(|(t, _)| *t).expect("done");
+        assert!(done < 0.18 + 0.5, "the surplus stopped at {done} s");
+    }
+
+    #[test]
+    fn a_surplus_decays_alike_at_30_60_and_144_hz() {
+        // The same surplus, then frames at each rate: all of it arrives, along egui's curve.
+        let curve = |hz: f64| {
+            let dt = 1.0 / hz;
+            let mut s = Surplus::default();
+            let mut moved = s.step(egui::vec2(0.0, -500.0), DOWN, 0.0, dt as f32, true).y;
+            let mut trace = vec![(0.0, moved)];
+            for frame in 1..(hz as u32) {
+                let now = f64::from(frame) * dt;
+                moved += s.step(NONE, NONE, now, dt as f32, true).y;
+                trace.push((now, moved));
+            }
+            assert!((moved + 500.0).abs() < 0.01, "{hz} Hz: all of it arrives: {moved}");
+            assert!(trace.iter().all(|(_, m)| *m >= -500.01), "{hz} Hz: never more: {trace:?}");
+            assert!(!s.pending(), "{hz} Hz: done within a second");
+            trace
+        };
+        let at = |trace: &[(f64, f32)], t: f64| trace.iter().rev().find(|(now, _)| *now <= t).map_or(0.0, |(_, m)| *m);
+        let (slow, mid, fast) = (curve(30.0), curve(60.0), curve(144.0));
+        // Discrete frames differ by at most a frame's share: 0.2 s in, all within 2%.
+        for t in [0.2, 0.3, 0.5] {
+            let (a, b, c) = (at(&slow, t), at(&mid, t), at(&fast, t));
+            assert!((a - b).abs() < 10.0 && (a - c).abs() < 10.0, "{t} s: {a} at 30 Hz, {b} at 60 Hz, {c} at 144 Hz");
+        }
+    }
 }

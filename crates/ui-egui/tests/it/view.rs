@@ -674,26 +674,7 @@ fn a_fast_spin_scrolls_as_smoothly_as_single_notches() {
     // #5371: in a fast spin, the accelerated surplus (up to five more notches) landed in the frame
     // each notch arrived, on top of egui's eased base, so the page jumped at every notch.
     const PAGES: usize = 60;
-    let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
-    let kids: String = (0..PAGES).map(|i| format!("{} 0 R ", i + 3)).collect();
-    pdf += &format!("2 0 obj << /Type /Pages /Kids [{kids}] /Count {PAGES} /MediaBox [0 0 300 400] >> endobj\n");
-    for i in 0..PAGES {
-        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R >> endobj\n", i + 3);
-    }
-    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
-    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
-        let mut app = PdfCraftApp::new();
-        app.set_option("language", "en").unwrap();
-        app.open_bytes("long.pdf", None, pdf.into_bytes()).expect("opens");
-        for (k, v) in [("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "100")] {
-            app.set_option(k, v).unwrap();
-        }
-        app
-    });
-    h.run_steps(8);
-    let at = h.state().views[0].viewport_rect().center();
-    h.hover_at(at);
-    h.run_steps(2);
+    let mut h = blank_pages(PAGES);
     // How far the document scrolled down in one frame, from a page on screen in both.
     fn step_moved(h: &mut Harness<'static, PdfCraftApp>) -> f32 {
         let tops = |h: &Harness<'static, PdfCraftApp>| (0..PAGES).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
@@ -724,6 +705,95 @@ fn a_fast_spin_scrolls_as_smoothly_as_single_notches() {
     step_moved(&mut h);
     let back: f32 = (0..20).map(|_| step_moved(&mut h)).sum();
     assert!(back < 0.0, "a notch back after the spin scrolls up: moved {back}");
+}
+
+/// `pages` blank 300 × 400 pages, continuous at 100 % with no side panels, drawn at 60 frames a
+/// second, with the pointer over the middle of the pages.
+fn blank_pages(pages: usize) -> Harness<'static, PdfCraftApp> {
+    let mut pdf = String::from("%PDF-1.7\n1 0 obj << /Type /Catalog /Pages 2 0 R >> endobj\n");
+    let kids: String = (0..pages).map(|i| format!("{} 0 R ", i + 3)).collect();
+    pdf += &format!("2 0 obj << /Type /Pages /Kids [{kids}] /Count {pages} /MediaBox [0 0 300 400] >> endobj\n");
+    for i in 0..pages {
+        pdf += &format!("{} 0 obj << /Type /Page /Parent 2 0 R >> endobj\n", i + 3);
+    }
+    pdf += "trailer << /Root 1 0 R >>\n%%EOF";
+    let mut h = Harness::builder().with_size(egui::vec2(1400.0, 900.0)).with_step_dt(1.0 / 60.0).build_eframe(move |_cc| {
+        let mut app = PdfCraftApp::new();
+        app.set_option("language", "en").unwrap();
+        app.open_bytes("long.pdf", None, pdf.into_bytes()).expect("opens");
+        for (k, v) in [("left", "closed"), ("panel", "none"), ("layout", "continuous"), ("zoom", "100")] {
+            app.set_option(k, v).unwrap();
+        }
+        app
+    });
+    h.run_steps(8);
+    let at = h.state().views[0].viewport_rect().center();
+    h.hover_at(at);
+    h.run_steps(2);
+    h
+}
+
+#[test]
+fn a_fast_spin_into_the_end_of_the_document_stops_there() {
+    // What a spin still owes scrolls through the same ScrollArea as egui's eased notches, which
+    // stops at the end of the document: the last page neither goes past the end nor comes back.
+    const PAGES: usize = 4;
+    let mut h = blank_pages(PAGES);
+    let bottom = |h: &Harness<'static, PdfCraftApp>| rect(h, PAGES - 1).map(|r| r.max.y);
+    let mut bottoms = Vec::new();
+    // Ten notches, one every third frame: a fast spin, more than the document has left.
+    for _ in 0..10 {
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        for _ in 0..3 {
+            h.step();
+            bottoms.extend(bottom(&h));
+        }
+    }
+    for _ in 0..60 {
+        h.step();
+        bottoms.extend(bottom(&h));
+    }
+    let end = *bottoms.last().expect("the last page is on screen at the end");
+    assert!(end <= h.state().views[0].viewport_rect().max.y, "the spin reached the end of the document: {end}");
+    assert!(bottoms.windows(2).all(|w| w[1] <= w[0] + 0.01), "it never scrolls back up: {bottoms:?}");
+    assert!(bottoms.iter().all(|b| *b >= end - 0.01), "nor past where it stops: {bottoms:?}");
+}
+
+#[test]
+fn a_click_stops_what_a_fast_spin_still_owes() {
+    use pdfcraft_ui_egui::scroll_speed::ScrollSpeed;
+    // A press starts something new (a selection, a drag): the rest of the spin's surplus must not
+    // move the page under it. egui's own eased notch finishes, as after a single notch.
+    const PAGES: usize = 60;
+    let tail = |click: bool| {
+        let mut h = blank_pages(PAGES);
+        for _ in 0..12 {
+            h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+            h.run_steps(3);
+        }
+        h.event(wheel(MouseWheelUnit::Line, -1.0, TouchPhase::Move));
+        h.step();
+        if click {
+            let at = h.state().views[0].viewport_rect().center();
+            for pressed in [true, false] {
+                h.event(egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE });
+            }
+        }
+        // How far the document scrolls down over the next half second, from a page on screen
+        // in each pair of frames (the spin is well past the first pages).
+        let tops = |h: &Harness<'static, PdfCraftApp>| (0..PAGES).map(|p| rect(h, p).map(|r| r.min.y)).collect::<Vec<_>>();
+        let mut moved = 0.0;
+        for _ in 0..30 {
+            let before = tops(&h);
+            h.step();
+            let after = tops(&h);
+            moved += before.iter().zip(&after).find_map(|(b, a)| Some(b.as_ref()? - a.as_ref()?)).expect("a page stays on screen");
+        }
+        moved
+    };
+    let (kept, stopped) = (tail(false), tail(true));
+    let base = ScrollSpeed::default().line_points();
+    assert!(kept - stopped > base, "the click stopped the surplus: {stopped} after it, {kept} without");
 }
 
 /// Steps `frames` frames and returns how far the document scrolled down over them, from the

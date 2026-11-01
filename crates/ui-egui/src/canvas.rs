@@ -2023,6 +2023,8 @@ fn draw_pages(
     // its owner; in the gap between pages it has none).
     if ptr.pressed().is_some() {
         view.router.cancel();
+        // Nor does the rest of a fast spin move the page under it (#5371).
+        view.wheel_surplus.reset();
         // The page widget is not focusable. Explicitly return keyboard ownership from Pages
         // when the user presses the document, without stealing focus through a modal.
         if let Some(id) = view.pages_focus_id {
