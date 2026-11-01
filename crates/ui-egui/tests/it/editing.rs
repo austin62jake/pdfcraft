@@ -3160,6 +3160,13 @@ fn copied_pages_paste_whatever_the_system_clipboard_holds() {
     h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
     h.run_steps(2);
     assert_eq!(page_texts(h.state()).len(), 5, "Edit ▸ Paste pastes the copied page");
+    // In a text field, Edit ▸ Paste pastes text there, not pages.
+    h.get_by_role_and_label(Role::TextInput, "Selected pages").click();
+    h.run_steps(1);
+    assert!(h.ctx.text_edit_focused());
+    h.state_mut().run_menu_command(&ctx, &craft_menu::CommandRef::new("edit.paste"));
+    h.run_steps(2);
+    assert_eq!(page_texts(h.state()).len(), 5, "a focused text field takes the paste");
 }
 
 fn source_font_fixture() -> Vec<u8> {
