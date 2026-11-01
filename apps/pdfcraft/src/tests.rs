@@ -127,20 +127,32 @@ fn on_windows_wgpu_leaves_an_opengl_only_gpu_to_eframes_opengl_renderer() {
 #[test]
 fn pick_adapter_takes_a_gpus_opengl_adapter_last_and_an_opengl_only_gpu_over_software() {
     use eframe::wgpu::{Backend, DeviceType};
-    // One GPU offered through OpenGL and through Direct3D 12 or Vulkan, in either order: never
-    // OpenGL, which `wgpu_draws_with` declines on Windows.
+    // wgpu's OpenGL adapter has its vendor's id, no device id, and a kind guessed from its
+    // strings: every Intel GPU is integrated, and most others are "other" (wgpu-hal's gles
+    // `make_info`).
+    let gl = |vendor: u32, kind| (vendor, 0, kind, Backend::Gl);
+    // A GPU offered through OpenGL and through Direct3D 12 or Vulkan, in either order, with or
+    // without a known display: never OpenGL, which `wgpu_draws_with` declines on Windows.
+    const ARC: (u32, u32) = (0x8086, 0x56a0);
     for other in [Backend::Dx12, Backend::Vulkan] {
-        let gl_first =
-            [(INTEL_IGPU.0, INTEL_IGPU.1, DeviceType::IntegratedGpu, Backend::Gl), (INTEL_IGPU.0, INTEL_IGPU.1, DeviceType::IntegratedGpu, other)];
-        assert_eq!(super::pick_adapter(&gl_first, &[panel(INTEL_IGPU)], None), Some(1), "{other:?}");
-        assert_eq!(super::pick_adapter(&[gl_first[1], gl_first[0]], &[panel(INTEL_IGPU)], None), Some(0), "{other:?}");
-        assert_eq!(super::pick_adapter(&gl_first, &[], None), Some(1), "{other:?} with no display known");
+        for (gpu, kind, guessed) in [
+            (INTEL_IGPU, DeviceType::IntegratedGpu, DeviceType::IntegratedGpu),
+            // An Intel discrete GPU, which wgpu's OpenGL backend calls integrated (CodeRabbit).
+            (ARC, DeviceType::DiscreteGpu, DeviceType::IntegratedGpu),
+            (NVIDIA, DeviceType::DiscreteGpu, DeviceType::Other),
+        ] {
+            let gl_first = [gl(gpu.0, guessed), (gpu.0, gpu.1, kind, other)];
+            for displays in [&[panel(gpu)][..], &[]] {
+                assert_eq!(super::pick_adapter(&gl_first, displays, None), Some(1), "{gpu:x?} {other:?} {displays:?}");
+                assert_eq!(super::pick_adapter(&[gl_first[1], gl_first[0]], displays, None), Some(0), "{gpu:x?} {other:?} {displays:?}");
+            }
+        }
     }
     // Issue #4134: an Intel HD 4000 has only OpenGL, and the Microsoft Basic Render Driver (in
     // software) has Direct3D 12. The GPU is still picked, by kind, with or without a known
     // display, as over Remote Desktop; declining it then starts glow on that GPU.
     const HD_4000: (u32, u32) = (0x8086, 0x0166);
-    let ivy_bridge = [(0x1414, 0x008c, DeviceType::Cpu, Backend::Dx12), (HD_4000.0, HD_4000.1, DeviceType::IntegratedGpu, Backend::Gl)];
+    let ivy_bridge = [(0x1414, 0x008c, DeviceType::Cpu, Backend::Dx12), gl(HD_4000.0, DeviceType::IntegratedGpu)];
     assert_eq!(super::pick_adapter(&ivy_bridge, &[panel(HD_4000)], None), Some(1));
     assert_eq!(super::pick_adapter(&ivy_bridge, &[], None), Some(1));
     assert!(!super::wgpu_draws_with(Backend::Gl, true, false));

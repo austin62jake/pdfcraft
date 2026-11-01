@@ -796,10 +796,14 @@ fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
 /// PCI ids) first, then one that drives a display. Among several of those, the one driving the
 /// primary display (a hybrid laptop's panel, #8; the primary display on Windows, #378), or else,
 /// with no primary display known (a Linux desktop with a monitor on each GPU, #445), the discrete
-/// one. Otherwise the most frugal kind: integrated, discrete, other, virtual, software. Of one
-/// GPU's adapters, the one wgpu reaches through OpenGL comes last, whatever order wgpu lists them
-/// in: on Windows wgpu offers a Direct3D 12 GPU through OpenGL too, and declines OpenGL there
-/// (`wgpu_draws_with`).
+/// one. Otherwise the most frugal kind: integrated, discrete, other, virtual, software.
+///
+/// On Windows wgpu offers a Direct3D 12 GPU through OpenGL too, and declines OpenGL there
+/// (`wgpu_draws_with`), so an OpenGL adapter comes after another adapter of its vendor. wgpu's
+/// OpenGL adapter has no device id and guesses its kind (every Intel GPU is integrated), so it is
+/// matched by vendor alone, before its kind is compared: an Intel discrete GPU's Direct3D 12
+/// adapter beats its own OpenGL one. A GPU with only OpenGL (Intel's Ivy Bridge) still beats the
+/// software adapter, Microsoft's.
 fn pick_adapter(
     adapters: &[(u32, u32, eframe::wgpu::DeviceType, eframe::wgpu::Backend)],
     displays: &[DisplayGpu],
@@ -825,7 +829,9 @@ fn pick_adapter(
                 DeviceType::VirtualGpu => 4,
                 DeviceType::Cpu => 5,
             };
-            (compositor != Some((*vendor, *device)), !drives_display, !drives_primary, rank, *backend == Backend::Gl)
+            let gl = *backend == Backend::Gl;
+            let vendor_has_more = gl && adapters.iter().any(|(v, _, _, b)| v == vendor && *b != Backend::Gl);
+            (compositor != Some((*vendor, *device)), !drives_display, !drives_primary, vendor_has_more, rank, gl)
         })
         .map(|(i, _)| i)
 }
