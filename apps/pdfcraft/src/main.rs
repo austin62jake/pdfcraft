@@ -623,11 +623,11 @@ fn configure_gpu(native: &mut eframe::NativeOptions) {
         if !displays.is_empty() || compositor.is_some() || cfg!(target_os = "windows") {
             setup.native_adapter_selector = Some(std::sync::Arc::new(move |adapters, surface| {
                 let usable: Vec<&eframe::wgpu::Adapter> = adapters.iter().filter(|a| surface.is_none_or(|s| a.is_surface_supported(s))).collect();
-                let infos: Vec<(u32, u32, eframe::wgpu::DeviceType)> = usable
+                let infos: Vec<(u32, u32, eframe::wgpu::DeviceType, eframe::wgpu::Backend)> = usable
                     .iter()
                     .map(|a| {
                         let info = a.get_info();
-                        (info.vendor, info.device, info.device_type)
+                        (info.vendor, info.device, info.device_type, info.backend)
                     })
                     .collect();
                 let picked = pick_adapter(&infos, &displays, compositor).and_then(|i| usable.get(i)).map(|a| (*a).clone());
@@ -796,15 +796,22 @@ fn linux_display_gpus(drm: &std::path::Path) -> Vec<DisplayGpu> {
 /// PCI ids) first, then one that drives a display. Among several of those, the one driving the
 /// primary display (a hybrid laptop's panel, #8; the primary display on Windows, #378), or else,
 /// with no primary display known (a Linux desktop with a monitor on each GPU, #445), the discrete
-/// one. Otherwise the most frugal kind: integrated, discrete, other, virtual, software.
-fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[DisplayGpu], compositor: Option<(u32, u32)>) -> Option<usize> {
-    use eframe::wgpu::DeviceType;
+/// one. Otherwise the most frugal kind: integrated, discrete, other, virtual, software. Of one
+/// GPU's adapters, the one wgpu reaches through OpenGL comes last, whatever order wgpu lists them
+/// in: on Windows wgpu offers a Direct3D 12 GPU through OpenGL too, and declines OpenGL there
+/// (`wgpu_draws_with`).
+fn pick_adapter(
+    adapters: &[(u32, u32, eframe::wgpu::DeviceType, eframe::wgpu::Backend)],
+    displays: &[DisplayGpu],
+    compositor: Option<(u32, u32)>,
+) -> Option<usize> {
+    use eframe::wgpu::{Backend, DeviceType};
     let display = |pci: (u32, u32)| displays.iter().find(|g| g.pci == pci);
     let multi_gpu_desktop = displays.len() > 1 && !displays.iter().any(|g| g.primary);
     adapters
         .iter()
         .enumerate()
-        .min_by_key(|(_, (vendor, device, kind))| {
+        .min_by_key(|(_, (vendor, device, kind, backend))| {
             let shown = display((*vendor, *device));
             let drives_display = shown.is_some();
             let drives_primary = shown.is_some_and(|g| g.primary);
@@ -818,7 +825,7 @@ fn pick_adapter(adapters: &[(u32, u32, eframe::wgpu::DeviceType)], displays: &[D
                 DeviceType::VirtualGpu => 4,
                 DeviceType::Cpu => 5,
             };
-            (compositor != Some((*vendor, *device)), !drives_display, !drives_primary, rank)
+            (compositor != Some((*vendor, *device)), !drives_display, !drives_primary, rank, *backend == Backend::Gl)
         })
         .map(|(i, _)| i)
 }
